@@ -12,11 +12,16 @@
 (define-constant err-invalid-royalty-split (err u107))
 (define-constant err-transfer-failed (err u108))
 (define-constant err-invalid-recipient (err u109))
+(define-constant err-paused (err u110))
 
 ;; Data Variables
 (define-data-var next-track-id uint u1)
 (define-data-var next-license-id uint u1)
 (define-data-var total-royalties uint u0)
+(define-data-var contract-paused bool false)
+
+;; Events
+(define-data-var last-distribution-block uint u0)
 
 ;; Define NFTs
 (define-non-fungible-token track uint)
@@ -50,17 +55,24 @@
     }
 )
 
-;; Collaboration Proposals
-(define-map collaboration-proposals
-    {track-id: uint, collaborator: principal}
-    {
-        proposed-by: principal,
-        royalty-share: uint,
-        status: (string-ascii 20)
-    }
+;; Administrative Functions
+(define-public (pause-contract)
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (var-set contract-paused true)
+        (ok true)
+    )
 )
 
-;; Distribute Royalties
+(define-public (unpause-contract)
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (var-set contract-paused false)
+        (ok true)
+    )
+)
+
+;; Enhanced Distribute Royalties
 (define-public (distribute-royalties (track-id uint))
     (let
         (
@@ -69,33 +81,42 @@
             (collaborators (get collaborators track-data))
             (royalties (get royalties track-data))
         )
+        (asserts! (not (var-get contract-paused)) err-paused)
         (asserts! (> earnings u0) err-invalid-royalty-split)
+        (asserts! (>= block-height (+ (var-get last-distribution-block) u1)) err-not-authorized)
+        
+        ;; Perform distribution
         (try! (distribute-to-collaborators track-id collaborators royalties earnings))
+        
+        ;; Update state
+        (var-set last-distribution-block block-height)
+        (print {event: "royalties-distributed", track-id: track-id, amount: earnings})
         (ok true)
     )
 )
 
-;; Helper function for royalty distribution
+;; Enhanced distribution helper
 (define-private (distribute-to-collaborators (track-id uint) (collaborators (list 10 principal)) (royalties (list 10 uint)) (total uint))
     (let
         (
             (shares-sum (fold + royalties u0))
         )
         (asserts! (is-eq shares-sum u100) err-invalid-royalty-split)
-        (ok (map distribute-share collaborators royalties))
+        (map distribute-share collaborators royalties)
+        (ok true)
     )
 )
 
-;; Transfer License
-(define-public (transfer-license (license-id uint) (recipient principal))
+;; Enhanced share distribution
+(define-private (distribute-share (recipient principal) (share uint))
     (let
         (
-            (license-data (unwrap! (map-get? licenses license-id) err-not-authorized))
+            (amount (/ (* total share) u100))
         )
-        (asserts! (is-eq tx-sender (unwrap! (nft-get-owner? license license-id) err-not-authorized)) err-not-authorized)
-        (asserts! (get transferable license-data) err-not-authorized)
-        (try! (nft-transfer? license license-id tx-sender recipient))
-        (ok true)
+        (if (and (> amount u0) (is-some recipient))
+            (try! (stx-transfer? amount tx-sender recipient))
+            false
+        )
     )
 )
 
