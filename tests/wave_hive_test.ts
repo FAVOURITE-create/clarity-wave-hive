@@ -7,14 +7,33 @@ import {
 } from 'https://deno.land/x/clarinet@v1.0.0/index.ts';
 import { assertEquals } from 'https://deno.land/std@0.90.0/testing/asserts.ts';
 
-[Previous test cases remain unchanged...]
-
 Clarinet.test({
-    name: "Can distribute royalties correctly",
+    name: "Can distribute royalties correctly with security checks",
     async fn(chain: Chain, accounts: Map<string, Account>) {
         const deployer = accounts.get('deployer')!;
         const collaborator = accounts.get('wallet_1')!;
         
+        // Test contract pause
+        let pauseBlock = chain.mineBlock([
+            Tx.contractCall('wave-hive', 'pause-contract', [], deployer.address)
+        ]);
+        pauseBlock.receipts[0].result.expectOk();
+        
+        // Test distribution while paused
+        let failedDistribution = chain.mineBlock([
+            Tx.contractCall('wave-hive', 'distribute-royalties', [
+                types.uint(1)
+            ], deployer.address)
+        ]);
+        failedDistribution.receipts[0].result.expectErr(110); // err-paused
+        
+        // Unpause and test normal distribution
+        let unpauseBlock = chain.mineBlock([
+            Tx.contractCall('wave-hive', 'unpause-contract', [], deployer.address)
+        ]);
+        unpauseBlock.receipts[0].result.expectOk();
+        
+        // Create track and test distribution
         let block = chain.mineBlock([
             Tx.contractCall('wave-hive', 'create-track', [
                 types.utf8("Royalty Track"),
@@ -42,3 +61,5 @@ Clarinet.test({
         distributeBlock.receipts[0].result.expectOk();
     }
 });
+
+[Previous test cases remain unchanged...]
